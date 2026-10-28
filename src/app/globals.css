@@ -1,26 +1,89 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ============================================================
+   AICTE CaseWatch — "Official Seal" token spine
+   Warm paper + oxblood, serif display. Light theme.
+   ============================================================ */
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+@theme {
+  /* Neutrals (warm paper) */
+  --color-paper: #fbf8f3;
+  --color-surface: #ffffff;
+  --color-sunken: #f4eee4;
+  --color-line: #e7e2d8;
+  --color-line-strong: #d7cdbb;
+  --color-ink: #1a1613;
+  --color-ink-muted: #6b6253;
+  --color-ink-subtle: #988c78;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* Accent (oxblood) + gold hairline */
+  --color-accent: #8a1c3b;
+  --color-accent-hover: #731530;
+  --color-accent-weak: #f6e7eb;
+  --color-gold: #b58a3c;
+
+  /* Voice section warm accents (visually distinct from Complaints) */
+  --color-ember: #c2410c; /* upvote */
+  --color-ocean: #3b5ba5; /* downvote / info */
+
+  /* Fonts */
+  --font-display: var(--font-fraunces), ui-serif, Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  /* Radius scale — varied on purpose (inputs < cards < modals) */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Layered, warm-tinted shadows (ambient + direct) */
+@layer utilities {
+  .shadow-card {
+    box-shadow:
+      0 1px 2px rgba(26, 22, 19, 0.05),
+      0 1px 3px rgba(26, 22, 19, 0.04);
+  }
+  .shadow-pop {
+    box-shadow:
+      0 2px 4px rgba(26, 22, 19, 0.06),
+      0 8px 24px rgba(26, 22, 19, 0.1);
+  }
+  /* Signature detail: gold letterpress hairline under section titles */
+  .rule-gold {
+    background-image: linear-gradient(
+      to right,
+      var(--color-gold) 0,
+      var(--color-gold) 2.5rem,
+      var(--color-line) 2.5rem,
+      var(--color-line) 100%
+    );
+    height: 2px;
+  }
+}
+
+/* Honor reduced-motion everywhere */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Tabular figures for codes/metrics by default on the mono font */
+.font-mono {
+  font-variant-numeric: tabular-nums;
 }

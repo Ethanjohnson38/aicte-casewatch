@@ -1,0 +1,295 @@
+// AICTE CaseWatch — Prisma schema
+// Local PostgreSQL only. The browser never connects to the DB directly;
+// all access is server-side through Prisma.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+
+enum Role {
+  COMMUNITY_MEMBER
+  OFFICER
+  ADMIN
+}
+
+enum ComplaintStatus {
+  SUBMITTED
+  ASSIGNED
+  IN_REVIEW
+  RESOLVED
+  REOPENED
+  CLOSED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+// Timeline entry types for a complaint (status/assignment changes, notes, etc).
+enum ComplaintEventType {
+  CREATED
+  STATUS_CHANGED
+  ASSIGNED
+  PRIORITY_CHANGED
+  INTERNAL_NOTE // staff-only; never shown to the submitter or public
+  RESOLVED
+  REOPENED
+  LINKED_FROM_POST
+}
+
+// Moderation state of an AICTE Voice post.
+enum PostStatus {
+  PUBLISHED
+  FLAGGED
+  HIDDEN
+  REMOVED
+}
+
+// Officer disposition of an AI review-queue item.
+enum ReviewStatus {
+  PENDING
+  NEEDS_REVIEW
+  LINKED
+  CONVERTED
+  DISMISSED
+}
+
+// ---------- Identity & sessions ----------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  // Public, pseudonymous handle shown in AICTE Voice. Never link to email publicly.
+  pseudonym    String   @unique
+  // Server-controlled only. Registration always creates COMMUNITY_MEMBER;
+  // users can never set or elevate their own role.
+  role         Role     @default(COMMUNITY_MEMBER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions            Session[]
+  submittedComplaints Complaint[]         @relation("Submitter")
+  assignedComplaints  Complaint[]         @relation("AssignedOfficer")
+  complaintEvents     ComplaintEvent[]    @relation("EventActor")
+  posts               Post[]
+  comments            Comment[]
+  votes               Vote[]
+  reviewedItems       ReviewQueueItem[]   @relation("Reviewer")
+  createdLinks        PostComplaintLink[] @relation("LinkCreator")
+  auditLogs           AuditLog[]          @relation("AuditActor")
+  reports             Report[]            @relation("Reporter")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ---------- Reference data ----------
+
+model Institution {
+  id         String      @id @default(cuid())
+  name       String      @unique
+  createdAt  DateTime    @default(now())
+  complaints Complaint[]
+  posts      Post[]
+}
+
+model Category {
+  id         String      @id @default(cuid())
+  name       String      @unique
+  createdAt  DateTime    @default(now())
+  complaints Complaint[]
+  posts      Post[]
+}
+
+// ---------- A. Official Complaints ----------
+
+model Complaint {
+  id           String          @id @default(cuid())
+  trackingCode String          @unique
+  title        String
+  description  String
+  status       ComplaintStatus @default(SUBMITTED)
+  priority     Priority        @default(MEDIUM)
+
+  submitterId       String
+  submitter         User        @relation("Submitter", fields: [submitterId], references: [id])
+  institutionId     String
+  institution       Institution @relation(fields: [institutionId], references: [id])
+  categoryId        String
+  category          Category    @relation(fields: [categoryId], references: [id])
+  assignedOfficerId String?
+  assignedOfficer   User?       @relation("AssignedOfficer", fields: [assignedOfficerId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events ComplaintEvent[]
+  links  PostComplaintLink[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([institutionId])
+  @@index([categoryId])
+  @@index([assignedOfficerId])
+}
+
+model ComplaintEvent {
+  id          String             @id @default(cuid())
+  complaintId String
+  complaint   Complaint          @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  type        ComplaintEventType
+  // Human-readable summary of the change (e.g. "SUBMITTED -> ASSIGNED").
+  detail      String?
+  reason      String?
+  actorId     String
+  actor       User               @relation("EventActor", fields: [actorId], references: [id])
+  createdAt   DateTime           @default(now())
+
+  @@index([complaintId])
+  @@index([actorId])
+}
+
+// ---------- B. AICTE Voice ----------
+
+model Post {
+  id            String       @id @default(cuid())
+  authorId      String
+  // authorId is the PRIVATE identity mapping — never expose it publicly.
+  author        User         @relation(fields: [authorId], references: [id])
+  title         String
+  body          String
+  institutionId String?
+  institution   Institution? @relation(fields: [institutionId], references: [id])
+  categoryId    String?
+  category      Category?    @relation(fields: [categoryId], references: [id])
+  status        PostStatus   @default(PUBLISHED)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  comments   Comment[]
+  votes      Vote[]
+  reviewItem ReviewQueueItem?
+  links      PostComplaintLink[]
+  reports    Report[]
+
+  @@index([institutionId])
+  @@index([categoryId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  body      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([postId])
+  @@index([authorId])
+}
+
+model Vote {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Restricted to +1 or -1 by a CHECK constraint added in the init migration.
+  value     Int
+  createdAt DateTime @default(now())
+
+  // One vote per authenticated user per post.
+  @@unique([userId, postId])
+  @@index([postId])
+}
+
+model Report {
+  id         String   @id @default(cuid())
+  postId     String
+  post       Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  reporterId String
+  reporter   User     @relation("Reporter", fields: [reporterId], references: [id])
+  reason     String
+  createdAt  DateTime @default(now())
+
+  // One report per user per post.
+  @@unique([postId, reporterId])
+  @@index([postId])
+}
+
+// ---------- C. AI-assisted review ----------
+
+model ReviewQueueItem {
+  id               String       @id @default(cuid())
+  // One active review item per post (prevents duplicate queueing).
+  postId           String       @unique
+  post             Post         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  score            Int // 0-100 rule-based match score
+  assessment       String? // short label, e.g. "Likely related"
+  explanation      String // human-readable matching reasons
+  suggestedMatches Json? // [{ complaintId, score, reasons }]
+  status           ReviewStatus @default(PENDING)
+  reviewedById     String?
+  reviewedBy       User?        @relation("Reviewer", fields: [reviewedById], references: [id])
+  reviewedAt       DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([status])
+  @@index([score])
+}
+
+model PostComplaintLink {
+  id          String    @id @default(cuid())
+  postId      String
+  post        Post      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User      @relation("LinkCreator", fields: [createdById], references: [id])
+  note        String?
+  createdAt   DateTime  @default(now())
+
+  // Prevents duplicate links between the same post and complaint.
+  @@unique([postId, complaintId])
+  @@index([complaintId])
+}
+
+// ---------- Audit ----------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  actor      User     @relation("AuditActor", fields: [actorId], references: [id])
+  action     String // e.g. "COMPLAINT_ASSIGNED", "POST_LINKED"
+  entityType String // e.g. "Complaint", "Post"
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([entityType, entityId])
+}

@@ -1,0 +1,84 @@
+"use client";
+
+import { useActionState } from "react";
+import Link from "next/link";
+import { createComplaint } from "@/app/actions/complaints";
+import { Field, Select, TextArea, TextInput } from "@/components/ui/field";
+import { Button, buttonClasses } from "@/components/ui/button";
+import { PRIORITY_META, PRIORITY_VALUES } from "@/lib/format";
+
+type Option = { id: string; name: string };
+
+export default function ComplaintForm({
+  institutions,
+  categories,
+}: {
+  institutions: Option[];
+  categories: Option[];
+}) {
+  const [state, action, pending] = useActionState(createComplaint, {});
+
+  return (
+    <form action={action} className="space-y-5 rounded-md border border-line bg-surface p-6 shadow-card">
+      <Field label="Complaint title" htmlFor="title" hint="A short, specific summary.">
+        <TextInput id="title" name="title" required minLength={6} maxLength={140} />
+      </Field>
+
+      <div className="grid gap-5 sm:grid-cols-2">
+        <Field label="Institution" htmlFor="institutionId">
+          <Select id="institutionId" name="institutionId" required defaultValue="">
+            <option value="" disabled>
+              Select institution…
+            </option>
+            {institutions.map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Category" htmlFor="categoryId">
+          <Select id="categoryId" name="categoryId" required defaultValue="">
+            <option value="" disabled>
+              Select category…
+            </option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+
+      <Field label="Priority" htmlFor="priority" hint="Your assessment; an officer may adjust it.">
+        <Select id="priority" name="priority" defaultValue="MEDIUM">
+          {PRIORITY_VALUES.map((p) => (
+            <option key={p} value={p}>
+              {PRIORITY_META[p].label}
+            </option>
+          ))}
+        </Select>
+      </Field>
+
+      <Field label="Description" htmlFor="description" hint="What happened, when, and who is involved.">
+        <TextArea id="description" name="description" required minLength={20} rows={6} />
+      </Field>
+
+      {state.error && (
+        <p className="rounded-sm bg-accent-weak px-3 py-2 text-sm text-accent" role="alert">
+          {state.error}
+        </p>
+      )}
+
+      <div className="flex items-center justify-end gap-3">
+        <Link href="/complaints" className={buttonClasses("ghost", "md")}>
+          Cancel
+        </Link>
+        <Button type="submit" disabled={pending}>
+          {pending ? "Filing…" : "Submit complaint"}
+        </Button>
+      </div>
+    </form>
+  );
+}
