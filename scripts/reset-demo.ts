@@ -15,12 +15,18 @@ async function main() {
     return;
   }
 
-  // Children first (FK-safe order).
+  // Children first (FK-safe order). Evidence + case-evidence reference the uploader
+  // with a RESTRICT FK, so they must be cleared before the member accounts are
+  // deleted (and not every row is reachable by cascade — e.g. unpublished drafts).
   await prisma.reviewQueueItem.deleteMany({});
   await prisma.postComplaintLink.deleteMany({});
   await prisma.vote.deleteMany({});
   await prisma.comment.deleteMany({});
   await prisma.report.deleteMany({});
+  await prisma.evidence.deleteMany({});
+  await prisma.complaintEvidence.deleteMany({});
+  await prisma.caseRelation.deleteMany({});
+  await prisma.caseTransfer.deleteMany({});
   await prisma.complaintEvent.deleteMany({});
   await prisma.post.deleteMany({});
   await prisma.complaint.deleteMany({});

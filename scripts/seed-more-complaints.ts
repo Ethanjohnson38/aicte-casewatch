@@ -63,7 +63,8 @@ async function main() {
     const [title, c, iName] = TITLES[i];
     const status = STATUSES[i % STATUSES.length];
     const assigned = status === "SUBMITTED" ? null : pick(officers) ?? null;
-    const created = daysAgo(1 + i);
+    // Spread filings over ~6 months, weighted toward recent months (see seed-demo).
+    const created = daysAgo(Math.floor(Math.random() ** 2 * 175) + 2);
     const submitter = pick(members);
     await prisma.complaint.create({
       data: {

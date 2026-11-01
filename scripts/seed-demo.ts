@@ -65,7 +65,9 @@ async function main() {
 
   for (let i = 0; i < C.length; i++) {
     const s = C[i];
-    const created = daysAgo(1 + i * 2);
+    // Spread filings over ~6 months, weighted toward recent months, so the
+    // dashboard intake trend reads as a realistic ramp instead of one spike.
+    const created = daysAgo(Math.floor(Math.random() ** 2 * 165) + 3);
     const submitter = pick(members);
     const actor = s.off ?? officer1;
     const events: { type: string; detail?: string; reason?: string; actorId: string; createdAt: Date }[] = [
