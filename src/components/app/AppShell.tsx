@@ -17,6 +17,7 @@ const COMPLAINT_LINKS = [
 ];
 const STAFF_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/issues", label: "Emerging issues" },
   { href: "/review", label: "Review queue" },
 ];
 const VOICE_LINKS = [
