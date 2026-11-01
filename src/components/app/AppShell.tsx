@@ -12,6 +12,7 @@ type NavUser = { pseudonym: string; role: Role } | null;
 
 const COMPLAINT_LINKS = [
   { href: "/complaints", label: "Complaint register" },
+  { href: "/guidance", label: "Get grievance guidance" },
   { href: "/complaints/new", label: "File a complaint" },
 ];
 const STAFF_LINKS = [

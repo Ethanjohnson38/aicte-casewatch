@@ -16,7 +16,7 @@ export default async function NewComplaintPage() {
   ]);
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div className="mx-auto max-w-5xl">
       <PageHeader
         eyebrow="Official Complaints"
         title="File a formal complaint"
