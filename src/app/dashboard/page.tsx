@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/session";
 import { isStaffRole } from "@/lib/complaints";
 import { STATUS_META, STATUS_VALUES, relativeTime } from "@/lib/format";
+import { monthlyCounts, type MonthBucket } from "@/lib/stats";
 import { Card, PageHeader } from "@/components/ui/misc";
 
 export const dynamic = "force-dynamic";
@@ -70,11 +71,12 @@ export default async function DashboardPage() {
   const openFilter = { notIn: ["RESOLVED", "CLOSED"] as ComplaintStatus[] };
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
 
   const [
     overdue, approaching, awaitingInstitution, awaitingBureau,
     byBureau, bureaus, confirmedRelated, confirmedDuplicate, transfersCount,
-    intakeThisMonth, intakePrevMonth, resolvedThisMonth,
+    intakeThisMonth, intakePrevMonth, resolvedThisMonth, intakeRows,
   ] = await Promise.all([
     prisma.complaint.count({ where: { nextActionDueAt: { lt: now }, status: openFilter } }),
     prisma.complaint.count({ where: { nextActionDueAt: { gte: now, lte: approachingEnd }, status: openFilter } }),
@@ -88,7 +90,10 @@ export default async function DashboardPage() {
     prisma.complaint.count({ where: { createdAt: { gte: monthStart } } }),
     prisma.complaint.count({ where: { createdAt: { gte: prevMonthStart, lt: monthStart } } }),
     prisma.complaintEvent.count({ where: { type: "RESOLVED", createdAt: { gte: monthStart } } }),
+    prisma.complaint.findMany({ where: { createdAt: { gte: sixMonthsAgo } }, select: { createdAt: true } }),
   ]);
+
+  const intake = monthlyCounts(intakeRows.map((r) => r.createdAt), 6, now);
 
   const bureauCount = new Map(byBureau.map((b) => [b.currentBureauId, b._count._all]));
   const unassignedUnit = bureauCount.get(null) ?? 0;
@@ -119,6 +124,15 @@ export default async function DashboardPage() {
         <Metric href="/complaints?status=RESOLVED" label="Resolved" value={resolved} />
         <Metric href="/complaints?priority=URGENT" label="Urgent" value={urgent} highlight={urgent > 0} />
       </div>
+
+      {/* Intake trend */}
+      <Card className="mt-6 p-5">
+        <div className="mb-1 flex items-baseline justify-between gap-3">
+          <h2 className="font-display text-lg font-semibold">Complaint intake</h2>
+          <span className="text-xs text-ink-subtle">New cases filed per month · last 6 months</span>
+        </div>
+        <IntakeChart data={intake} />
+      </Card>
 
       {/* Needs intervention (deadlines + who we're waiting on) */}
       <h2 className="mt-8 mb-3 font-display text-lg font-semibold">Needs intervention</h2>
@@ -322,6 +336,49 @@ function BarRow({
         </div>
       </Link>
     </li>
+  );
+}
+
+// Single-series change-over-time bar chart. Inline SVG (no chart dependency),
+// one brand hue, every bar directly labelled so it reads without hover, and a
+// role="img" summary for screen readers. Real counts — honest empty state at 0.
+function IntakeChart({ data }: { data: MonthBucket[] }) {
+  const W = 900, H = 190, padX = 24, padTop = 26, padBottom = 28;
+  const plotH = H - padTop - padBottom;
+  const baseY = padTop + plotH;
+  const max = Math.max(1, ...data.map((d) => d.count));
+  const n = data.length || 1;
+  const slot = (W - padX * 2) / n;
+  const barW = Math.min(56, slot * 0.5);
+  const summary = data.map((d) => `${d.label} ${d.count}`).join(", ");
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="w-full"
+      role="img"
+      aria-label={`New complaints filed per month over the last 6 months: ${summary}.`}
+    >
+      <line x1={padX} y1={baseY} x2={W - padX} y2={baseY} className="stroke-line" strokeWidth={1.5} />
+      {data.map((d, i) => {
+        const h = Math.round((d.count / max) * plotH);
+        const x = padX + slot * i + (slot - barW) / 2;
+        const y = baseY - h;
+        return (
+          <g key={d.key}>
+            {h > 0 && (
+              <rect x={x} y={y} width={barW} height={h} rx={4} className="fill-accent" fillOpacity={0.85} />
+            )}
+            <text x={x + barW / 2} y={y - 8} textAnchor="middle" className="fill-ink font-mono text-[13px] font-semibold">
+              {d.count}
+            </text>
+            <text x={x + barW / 2} y={baseY + 20} textAnchor="middle" className="fill-ink-subtle text-[12px]">
+              {d.label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
