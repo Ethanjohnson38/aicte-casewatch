@@ -6,6 +6,18 @@ import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/session";
 import { requireRole } from "@/lib/auth";
 import { runTriageForPost } from "@/lib/triage/run";
+import { EVIDENCE } from "@/lib/evidence/config";
+import { canPublishEvidence } from "@/lib/evidence/publish";
+
+function parseEvidenceIds(raw: FormDataEntryValue | null): string[] {
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === "string").slice(0, 50) : [];
+  } catch {
+    return [];
+  }
+}
 
 type FormState = { error?: string };
 
@@ -25,13 +37,60 @@ export async function createPost(
   if (title.length < 6) return { error: "Title must be at least 6 characters." };
   if (body.length < 10) return { error: "Say a little more (at least 10 characters)." };
 
-  const post = await prisma.post.create({
-    data: { title, body, institutionId, categoryId, authorId: user.id },
-  });
+  // Optional visual evidence: ids of the user's own processed draft uploads.
+  const evidenceIds = parseEvidenceIds(formData.get("evidenceIds"));
+  if (evidenceIds.length > EVIDENCE.maxFiles)
+    return { error: `Up to ${EVIDENCE.maxFiles} images per post.` };
+
+  if (evidenceIds.length) {
+    const evs = await prisma.evidence.findMany({ where: { id: { in: evidenceIds } } });
+    const byId = new Map(evs.map((e) => [e.id, e]));
+    for (const id of evidenceIds) {
+      const ev = byId.get(id);
+      // Must be this user's own, still a draft, and fully processed & safe to publish.
+      if (!ev || ev.uploaderId !== user.id || ev.published || ev.postId)
+        return { error: "One of the attachments is no longer available. Please re-upload." };
+      const pub = canPublishEvidence(ev);
+      if (!pub.ok) return { error: `An image can't be published yet: ${pub.reason}.` };
+    }
+  }
+
+  let postId: string;
+  try {
+    postId = await prisma.$transaction(async (tx) => {
+      const post = await tx.post.create({
+        data: { title, body, institutionId, categoryId, authorId: user.id },
+      });
+      if (evidenceIds.length) {
+        // Guarded updateMany makes attach idempotent: if any row was already
+        // attached/published (duplicate submit, race), count mismatches → rollback.
+        const r = await tx.evidence.updateMany({
+          where: { id: { in: evidenceIds }, uploaderId: user.id, published: false, postId: null },
+          data: { postId: post.id, published: true },
+        });
+        if (r.count !== evidenceIds.length) throw new Error("ATTACH_CONFLICT");
+        await tx.auditLog.create({
+          data: {
+            actorId: user.id,
+            action: "EVIDENCE_PUBLISHED",
+            entityType: "Post",
+            entityId: post.id,
+            metadata: { count: r.count },
+          },
+        });
+      }
+      return post.id;
+    });
+  } catch (e) {
+    if (e instanceof Error && e.message === "ATTACH_CONFLICT")
+      return { error: "Those images were already attached or are no longer available. Please re-upload." };
+    throw e;
+  }
+
   // Rule-based triage runs the post against complaints + posts (suggestion only;
   // never creates/modifies a complaint). Failure must not block posting.
   try {
-    await runTriageForPost(post.id);
+    await runTriageForPost(postId);
   } catch {
     // triage is best-effort
   }

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import type { ComplaintStatus } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/session";
 import { isStaffRole } from "@/lib/complaints";
@@ -17,6 +18,12 @@ const EV_LABEL: Record<string, string> = {
   RESOLVED: "resolved",
   REOPENED: "reopened",
   LINKED_FROM_POST: "linked from a community post",
+  TRANSFERRED: "transferred between units",
+  NEXT_ACTION: "next action updated",
+  RELATED_DECISION: "related-case decision",
+  OUTCOME_RECORDED: "outcome recorded",
+  EVIDENCE_ADDED: "evidence added",
+  EVIDENCE_REVIEWED: "evidence reviewed",
 };
 
 export default async function DashboardPage() {
@@ -57,6 +64,45 @@ export default async function DashboardPage() {
   const catCount = new Map(byCategory.map((b) => [b.categoryId, b._count._all]));
   const instCount = new Map(byInstitution.map((b) => [b.institutionId, b._count._all]));
 
+  // --- Coordination / monitoring metrics (Features A, F, H) ---
+  const now = new Date();
+  const approachingEnd = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+  const openFilter = { notIn: ["RESOLVED", "CLOSED"] as ComplaintStatus[] };
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  const [
+    overdue, approaching, awaitingInstitution, awaitingBureau,
+    byBureau, bureaus, confirmedRelated, confirmedDuplicate, transfersCount,
+    intakeThisMonth, intakePrevMonth, resolvedThisMonth,
+  ] = await Promise.all([
+    prisma.complaint.count({ where: { nextActionDueAt: { lt: now }, status: openFilter } }),
+    prisma.complaint.count({ where: { nextActionDueAt: { gte: now, lte: approachingEnd }, status: openFilter } }),
+    prisma.complaint.count({ where: { awaitingParty: "INSTITUTION", status: openFilter } }),
+    prisma.complaint.count({ where: { awaitingParty: "BUREAU", status: openFilter } }),
+    prisma.complaint.groupBy({ by: ["currentBureauId"], _count: { _all: true } }),
+    prisma.bureau.findMany({ orderBy: { name: "asc" }, select: { id: true, name: true, code: true } }),
+    prisma.caseRelation.count({ where: { status: "CONFIRMED" } }),
+    prisma.caseRelation.count({ where: { status: "CONFIRMED", type: "DUPLICATE" } }),
+    prisma.caseTransfer.count(),
+    prisma.complaint.count({ where: { createdAt: { gte: monthStart } } }),
+    prisma.complaint.count({ where: { createdAt: { gte: prevMonthStart, lt: monthStart } } }),
+    prisma.complaintEvent.count({ where: { type: "RESOLVED", createdAt: { gte: monthStart } } }),
+  ]);
+
+  const bureauCount = new Map(byBureau.map((b) => [b.currentBureauId, b._count._all]));
+  const unassignedUnit = bureauCount.get(null) ?? 0;
+
+  // Region breakdown: fold complaint counts per institution into their state.
+  const regionCount = new Map<string, number>();
+  for (const i of institutions) {
+    const n = instCount.get(i.id) ?? 0;
+    if (!n) continue;
+    const key = i.state ?? "Unspecified";
+    regionCount.set(key, (regionCount.get(key) ?? 0) + n);
+  }
+  const regions = [...regionCount.entries()].sort((a, b) => b[1] - a[1]);
+
   return (
     <div>
       <PageHeader
@@ -72,6 +118,15 @@ export default async function DashboardPage() {
         <Metric href="/complaints?status=SUBMITTED" label="Awaiting action" value={awaiting} />
         <Metric href="/complaints?status=RESOLVED" label="Resolved" value={resolved} />
         <Metric href="/complaints?priority=URGENT" label="Urgent" value={urgent} highlight={urgent > 0} />
+      </div>
+
+      {/* Needs intervention (deadlines + who we're waiting on) */}
+      <h2 className="mt-8 mb-3 font-display text-lg font-semibold">Needs intervention</h2>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Metric href="/complaints?deadline=overdue" label="Overdue actions" value={overdue} highlight={overdue > 0} />
+        <Metric href="/complaints?deadline=approaching" label="Due soon (≤3d)" value={approaching} highlight={approaching > 0} />
+        <Metric href="/complaints?awaiting=INSTITUTION" label="Awaiting institution" value={awaitingInstitution} />
+        <Metric href="/complaints?awaiting=BUREAU" label="Blocked on another unit" value={awaitingBureau} highlight={awaitingBureau > 0} />
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
@@ -116,6 +171,40 @@ export default async function DashboardPage() {
         </Breakdown>
       </div>
 
+      {/* Coordination breakdowns */}
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <Breakdown title="By Bureau / Cell">
+          {bureaus.map((b) => (
+            <BarRow
+              key={b.id}
+              href={`/complaints?bureauId=${b.id}`}
+              label={`${b.name} (${b.code})`}
+              count={bureauCount.get(b.id) ?? 0}
+              total={total}
+            />
+          ))}
+          {unassignedUnit > 0 && (
+            <BarRow href="/complaints" label="Unassigned unit" count={unassignedUnit} total={total} />
+          )}
+        </Breakdown>
+
+        <Breakdown title="By region / state">
+          {regions.length === 0 ? (
+            <li className="text-sm text-ink-subtle">No regional data recorded.</li>
+          ) : (
+            regions.map(([name, n]) => (
+              <BarRow
+                key={name}
+                href={name === "Unspecified" ? "/complaints" : `/complaints?state=${encodeURIComponent(name)}`}
+                label={name}
+                count={n}
+                total={total}
+              />
+            ))
+          )}
+        </Breakdown>
+      </div>
+
       {/* Recent activity */}
       <Card className="mt-6">
         <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
@@ -148,6 +237,17 @@ export default async function DashboardPage() {
           </ul>
         )}
       </Card>
+
+      {/* Coordination & trend stats (H) */}
+      <h2 className="mt-8 mb-3 font-display text-lg font-semibold">Coordination &amp; trends</h2>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+        <StaticMetric label="Confirmed related cases" value={confirmedRelated} small />
+        <StaticMetric label="Confirmed duplicates" value={confirmedDuplicate} small />
+        <StaticMetric label="Transfers logged" value={transfersCount} small />
+        <StaticMetric label="Intake this month" value={intakeThisMonth} small />
+        <StaticMetric label="Resolved this month" value={resolvedThisMonth} small />
+        <StaticMetric label="Intake last month" value={intakePrevMonth} small />
+      </div>
 
       {/* Secondary stats */}
       <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-3">

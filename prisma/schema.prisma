@@ -45,6 +45,40 @@ enum ComplaintEventType {
   RESOLVED
   REOPENED
   LINKED_FROM_POST
+  TRANSFERRED // ownership moved between Bureaus/Cells
+  NEXT_ACTION // next required action / deadline set
+  RELATED_DECISION // a related/duplicate link was confirmed or dismissed
+  OUTCOME_RECORDED // a finding/outcome was recorded
+  EVIDENCE_ADDED // a case evidence file was attached
+  EVIDENCE_REVIEWED // case evidence review status/note changed
+}
+
+// Reviewer disposition for an official-complaint evidence file.
+enum CaseEvidenceStatus {
+  RECEIVED // logged, not yet reviewed
+  REVIEWED // examined and accepted
+  NEEDS_CLARIFICATION // reviewer needs more information
+}
+
+// Which party a case is currently waiting on (orthogonal to status).
+enum AwaitingParty {
+  NONE
+  INSTITUTION // awaiting the institution's response
+  BUREAU // blocked on another Bureau/Cell
+  REVIEWER // awaiting expert/committee review
+}
+
+// Nature of a link between two complaints.
+enum CaseRelationType {
+  RELATED // related but distinct cases
+  DUPLICATE // the same underlying case
+}
+
+// Officer disposition of a related/duplicate link.
+enum RelationStatus {
+  SUGGESTED // rule-based suggestion, not yet decided
+  CONFIRMED // an officer confirmed the relationship
+  DISMISSED // an officer judged it a false match
 }
 
 // Moderation state of an AICTE Voice post.
@@ -64,6 +98,31 @@ enum ReviewStatus {
   DISMISSED
 }
 
+// Face-detection + blurring status for an evidence image.
+enum EvidenceFaceStatus {
+  PENDING // not processed yet
+  PROCESSED // faces detected and blurred
+  NO_FACES // ran successfully, no faces found
+  FAILED // detection/blur errored or timed out — needs retry/review, never published silently
+}
+
+// Sensitive-content screening status for an evidence image.
+enum EvidenceScreenStatus {
+  PENDING // not screened yet
+  CLEAR // screened, below thresholds
+  FLAGGED // auto-flagged sensitive (e.g. explicit) — hidden by default
+  REVIEW_REQUIRED // classifier unavailable/uncertain (e.g. violence) — fail safe to hidden + manual review
+  ERROR // screening errored — fail safe to hidden
+}
+
+// Manual reviewer disposition for flagged/needs-review evidence.
+enum EvidenceReviewStatus {
+  NONE // no manual review needed/taken
+  PENDING // awaiting a reviewer
+  CLEARED // reviewer judged it safe to unhide
+  CONFIRMED_SENSITIVE // reviewer confirmed it stays hidden by default
+}
+
 // ---------- Identity & sessions ----------
 
 model User {
@@ -78,17 +137,24 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  sessions            Session[]
-  submittedComplaints Complaint[]         @relation("Submitter")
-  assignedComplaints  Complaint[]         @relation("AssignedOfficer")
-  complaintEvents     ComplaintEvent[]    @relation("EventActor")
-  posts               Post[]
-  comments            Comment[]
-  votes               Vote[]
-  reviewedItems       ReviewQueueItem[]   @relation("Reviewer")
-  createdLinks        PostComplaintLink[] @relation("LinkCreator")
-  auditLogs           AuditLog[]          @relation("AuditActor")
-  reports             Report[]            @relation("Reporter")
+  sessions             Session[]
+  submittedComplaints  Complaint[]         @relation("Submitter")
+  assignedComplaints   Complaint[]         @relation("AssignedOfficer")
+  complaintEvents      ComplaintEvent[]    @relation("EventActor")
+  posts                Post[]
+  comments             Comment[]
+  votes                Vote[]
+  reviewedItems        ReviewQueueItem[]   @relation("Reviewer")
+  createdLinks         PostComplaintLink[] @relation("LinkCreator")
+  auditLogs            AuditLog[]          @relation("AuditActor")
+  reports              Report[]            @relation("Reporter")
+  uploadedEvidence     Evidence[]          @relation("EvidenceUploader")
+  reviewedEvidence     Evidence[]          @relation("EvidenceReviewer")
+  caseTransfers        CaseTransfer[]      @relation("TransferActor")
+  createdRelations     CaseRelation[]      @relation("RelationCreator")
+  decidedRelations     CaseRelation[]      @relation("RelationDecider")
+  uploadedCaseEvidence ComplaintEvidence[] @relation("CaseEvidenceUploader")
+  reviewedCaseEvidence ComplaintEvidence[] @relation("CaseEvidenceReviewer")
 }
 
 model Session {
@@ -105,11 +171,18 @@ model Session {
 // ---------- Reference data ----------
 
 model Institution {
-  id         String      @id @default(cuid())
-  name       String      @unique
-  createdAt  DateTime    @default(now())
+  id        String   @id @default(cuid())
+  name      String   @unique
+  // Optional consolidated-profile attributes (demo data; nullable so existing rows are valid).
+  state     String?
+  city      String?
+  type      String? // e.g. "Engineering College", "Polytechnic"
+  createdAt DateTime @default(now())
+
   complaints Complaint[]
   posts      Post[]
+
+  @@index([state])
 }
 
 model Category {
@@ -139,17 +212,130 @@ model Complaint {
   assignedOfficerId String?
   assignedOfficer   User?       @relation("AssignedOfficer", fields: [assignedOfficerId], references: [id])
 
+  // Current responsible Bureau/Cell (the single primary owner). Null = unassigned unit.
+  currentBureauId String?
+  currentBureau   Bureau? @relation("CurrentBureau", fields: [currentBureauId], references: [id])
+
+  // Coordination/lifecycle fields (Features C/E/F). All optional/defaulted so the
+  // migration is additive and existing rows stay valid.
+  awaitingParty   AwaitingParty @default(NONE)
+  nextAction      String?
+  nextActionDueAt DateTime?
+  deadlineBasis   String? // human-readable label of the configured rule used
+  outcome         String? // recorded finding/outcome (shown once resolved)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  events ComplaintEvent[]
-  links  PostComplaintLink[]
+  events       ComplaintEvent[]
+  links        PostComplaintLink[]
+  transfers    CaseTransfer[]
+  relatedA     CaseRelation[]      @relation("RelatedA")
+  relatedB     CaseRelation[]      @relation("RelatedB")
+  caseEvidence ComplaintEvidence[]
 
   @@index([status])
   @@index([priority])
   @@index([institutionId])
   @@index([categoryId])
   @@index([assignedOfficerId])
+  @@index([currentBureauId])
+  @@index([awaitingParty])
+  @@index([nextActionDueAt])
+}
+
+// ---------- Cross-Bureau coordination ----------
+
+// A Bureau or Cell that can own/handle official complaints.
+model Bureau {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  code        String   @unique // short identifier, e.g. "PGRC"
+  description String?
+  createdAt   DateTime @default(now())
+
+  complaints    Complaint[]    @relation("CurrentBureau")
+  transfersFrom CaseTransfer[] @relation("TransferFrom")
+  transfersTo   CaseTransfer[] @relation("TransferTo")
+}
+
+// Append-only ownership-transfer history. The current owner lives on Complaint;
+// this table preserves every hand-off (who, when, why, from→to).
+model CaseTransfer {
+  id           String    @id @default(cuid())
+  complaintId  String
+  complaint    Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  fromBureauId String?
+  fromBureau   Bureau?   @relation("TransferFrom", fields: [fromBureauId], references: [id])
+  toBureauId   String
+  toBureau     Bureau    @relation("TransferTo", fields: [toBureauId], references: [id])
+  reason       String // mandatory — never a silent transfer
+  actorId      String
+  actor        User      @relation("TransferActor", fields: [actorId], references: [id])
+  createdAt    DateTime  @default(now())
+
+  @@index([complaintId])
+  @@index([toBureauId])
+}
+
+// A confirmed/suggested/dismissed link between two complaints. The pair is stored
+// in a canonical order (aId < bId) and is unique, preventing duplicate links.
+// Linking never merges or deletes either case — both records are preserved.
+model CaseRelation {
+  id         String           @id @default(cuid())
+  aId        String
+  aComplaint Complaint        @relation("RelatedA", fields: [aId], references: [id], onDelete: Cascade)
+  bId        String
+  bComplaint Complaint        @relation("RelatedB", fields: [bId], references: [id], onDelete: Cascade)
+  type       CaseRelationType @default(RELATED)
+  status     RelationStatus   @default(SUGGESTED)
+  reason     String?
+  score      Int? // rule-based match score at decision time (0-100)
+
+  createdById String
+  createdBy   User      @relation("RelationCreator", fields: [createdById], references: [id])
+  decidedById String?
+  decidedBy   User?     @relation("RelationDecider", fields: [decidedById], references: [id])
+  decidedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@unique([aId, bId])
+  @@index([aId])
+  @@index([bId])
+  @@index([status])
+}
+
+// Secure evidence file attached to an OFFICIAL complaint (Feature G).
+// Distinct from Voice `Evidence`: officer-facing case evidence is NOT face-blurred
+// or screened, supports documents (PDF), and is served only via an authed route to
+// staff or the complaint's submitter. Access is recorded in the AuditLog.
+model ComplaintEvidence {
+  id          String    @id @default(cuid())
+  complaintId String
+  complaint   Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+
+  uploaderId String
+  uploader   User   @relation("CaseEvidenceUploader", fields: [uploaderId], references: [id])
+
+  // Random name in the private store (not a capability — every request is authorized).
+  storedName   String @unique
+  originalName String
+  mimeType     String
+  byteSize     Int
+
+  source      String? // e.g. "Institution's written reply", "Site inspection photo"
+  submittedAt DateTime? // when the evidence was submitted/received (officer-set)
+
+  status     CaseEvidenceStatus @default(RECEIVED)
+  reviewerId String?
+  reviewer   User?              @relation("CaseEvidenceReviewer", fields: [reviewerId], references: [id])
+  reviewedAt DateTime?
+  reviewNote String?
+
+  createdAt DateTime @default(now())
+
+  @@index([complaintId])
+  @@index([uploaderId])
 }
 
 model ComplaintEvent {
@@ -190,11 +376,62 @@ model Post {
   reviewItem ReviewQueueItem?
   links      PostComplaintLink[]
   reports    Report[]
+  evidence   Evidence[]
 
   @@index([institutionId])
   @@index([categoryId])
   @@index([status])
   @@index([createdAt])
+}
+
+// Privacy-protected visual evidence attached to an AICTE Voice post.
+// The ORIGINAL image is never retained: it is face-blurred in memory and only
+// the protected rendition is stored, in a private dir served via an authed route.
+model Evidence {
+  id String @id @default(cuid())
+
+  // Null while a draft upload is being reviewed; set when the uploader publishes.
+  // Abandoned drafts (null postId) are removed by the retention/cleanup script.
+  postId String?
+  post   Post?   @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  uploaderId String
+  uploader   User   @relation("EvidenceUploader", fields: [uploaderId], references: [id])
+
+  // Filename of the protected image in the private store (random; not guessable).
+  // Access is still authorized per-request — the name is not a capability.
+  storedName String @unique
+  mimeType   String // always image/webp after safe re-encode
+  byteSize   Int
+  width      Int
+  height     Int
+
+  faceCount  Int                @default(0)
+  faceStatus EvidenceFaceStatus @default(PENDING)
+
+  screenStatus   EvidenceScreenStatus @default(PENDING)
+  screenCategory String? // e.g. "EXPLICIT", "VIOLENCE_MANUAL"
+  screenScore    Float?
+
+  // sensitive = show the "potentially disturbing" overlay, hidden by default.
+  sensitive Boolean @default(false)
+
+  // Only published evidence is ever displayed; blocks display of unprocessed uploads.
+  published Boolean @default(false)
+
+  reviewStatus EvidenceReviewStatus @default(NONE)
+  reviewedById String?
+  reviewedBy   User?                @relation("EvidenceReviewer", fields: [reviewedById], references: [id])
+  reviewedAt   DateTime?
+  reviewNote   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([postId])
+  @@index([uploaderId])
+  @@index([screenStatus])
+  @@index([published])
 }
 
 model Comment {

@@ -11,6 +11,8 @@ import VoteControl from "@/components/voice/VoteControl";
 import CommentForm from "@/components/voice/CommentForm";
 import ReportButton from "@/components/voice/ReportButton";
 import ModerateButton from "@/components/voice/ModerateButton";
+import EvidenceGallery from "@/components/voice/EvidenceGallery";
+import EvidenceStaffPanel from "@/components/evidence/EvidenceStaffPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +62,20 @@ export default async function VoicePage({
         comments: {
           orderBy: { createdAt: "asc" },
           include: { author: { select: { pseudonym: true } } },
+        },
+        evidence: {
+          where: { published: true },
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            sensitive: true,
+            width: true,
+            height: true,
+            faceStatus: true,
+            screenStatus: true,
+            screenCategory: true,
+            reviewStatus: true,
+          },
         },
       },
     }),
@@ -261,6 +277,11 @@ export default async function VoicePage({
                       <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink-muted">
                         {p.body}
                       </p>
+
+                      {p.evidence.length > 0 && <EvidenceGallery evidence={p.evidence} />}
+                      {staff && p.evidence.length > 0 && (
+                        <EvidenceStaffPanel evidence={p.evidence} from="/voice" />
+                      )}
 
                       {/* Actions: report + staff moderation */}
                       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">

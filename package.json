@@ -10,17 +10,27 @@
     "db:seed": "prisma db seed",
     "db:seed:demo": "node scripts/seed-demo.ts",
     "db:seed:more": "node scripts/seed-more-complaints.ts",
-    "db:reset:demo": "node scripts/reset-demo.ts"
+    "db:seed:coordination": "node scripts/seed-coordination.ts",
+    "db:reset:demo": "node scripts/reset-demo.ts",
+    "evidence:fetch-models": "node scripts/fetch-models.ts",
+    "evidence:cleanup": "node scripts/cleanup-evidence.ts",
+    "evidence:selftest": "node scripts/evidence-selftest.ts",
+    "test": "node --test \"tests/**/*.test.ts\""
   },
   "prisma": {
     "seed": "node prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@vladmandic/face-api": "^1.7.15",
     "next": "16.4.3",
+    "nsfwjs": "^4.3.0",
     "prisma": "^6.19.3",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",

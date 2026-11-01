@@ -40,3 +40,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# evidence feature: private uploads (never commit) + downloaded AI models
+/storage/
+/models/
